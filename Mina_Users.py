@@ -24,8 +24,7 @@ logging.getLogger(__name__).addHandler(logging.StreamHandler(sys.stdout))
 class MinaAnalysis:
 
     def __init__( self, mode='nominal'):
-        self.dec_multiplier = 1000000000
-        self.sleep_time = 30
+        self.sleep_time = 3600
 
         # read config file
         self.config = self.read_config( )
@@ -58,16 +57,14 @@ class MinaAnalysis:
         } )
         self.analysis_cursor = self.analysis.cursor()
 
-        # add genesis if users table is empty
-        self.genesis = self.get_url_json( self.config['URLS']['genesis'] )
-        if self.get_num_names() == 0:
-            self.parse_genesis()
-
         # loop
         while True:
 
             # update the users
-            print( self.get_providers() )
+            providers = self.get_providers()
+            for key in providers.keys():
+                if key != "" and key.startswith("B62") and len( key ) == 55 and len(providers[key])> 3:
+                    self.update_names( key, providers[key].replace("'","") )
 
             # Sleep after each cycle
             self.logger.info( f"Sleeping for { self.sleep_time } Seconds" )
@@ -97,48 +94,49 @@ class MinaAnalysis:
         conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT);
         return conn
 
+    def get_csv_url( self, url ):
+        '''return the csv as a list'''
+        req = urllib.request.Request( url )
+        req.add_header('User-Agent', 'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:77.0) Gecko/20100101 Firefox/77.0')
+        content = urllib.request.urlopen(req)
+        data = pd.read_csv(content, header=None)
+        return list( data[0] ) 
+
+    def get_url_json( self, url_address ):
+        '''return the json'''
+        with urllib.request.urlopen( url_address ) as url:
+            return json.loads(url.read().decode())
+
     def get_providers( self ):
         '''get providers'''
-        output = { 'providers': dict(),
-                   'delegation_program': dict(),
-                   'exchanges': dict() }
+        output = dict()
         
         # staketab providers
         data = self.get_url_json( self.config['URLS']['staketab'] )
         for provider in data['staking_providers']:
-            output[ 'providers' ][ provider['provider_address'] ] = provider['provider_title'] 
-            # check if it is an exchange
-            if " Wallet" in provider['provider_title'] and provider['provider_address'] != '':
-                output[ 'exchanges' ][ provider['provider_address'] ] = provider['provider_title'] 
+            output[ provider['provider_address'] ] = provider['provider_title'] 
 
         # Mina Foundation
         mf_data = self.get_csv_url( self.config['URLS']['mina_foundation'] )
         for idx, address in enumerate(mf_data):
-            output[ 'delegation_program' ][ address ] = f'Mina Foundation {idx}'
+            output[ address ] = f'Mina Foundation {idx}'
 
         # O1 Labs
         mf_data = self.get_csv_url( self.config['URLS']['o1_labs'] )
         for idx, address in enumerate(mf_data):
-            output[ 'delegation_program' ][ address ] = f'O1 Labs {idx}'
+            output[ address ] = f'O1 Labs {idx}'
 
         return output 
 
-    def add_creator( self, data ):
-        '''add the creator for the receiver'''
-        cmd = """INSERT INTO users (
+    def update_names( self, public_key, name ):
+        '''add / update name address'''
+        self.logger.info( f"Inserting / Updating {public_key} - {name}")
+        cmd = f"""INSERT INTO names (
             public_key,
-            creator,
-            first_active,
-            genesis,
-            foundation,
-            exchange,
-            scammer
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT DO NOTHING"""
-        if self.mode in [ 'nominal', 'test', 'random' ]:
-            self.analysis_cursor.execute( cmd, data )
-        else:
-            self.logger.debug( f'Creator Not Inserted with Mode: {self.mode}' )
+            name
+            ) VALUES ('{public_key}', '{name}')
+            ON CONFLICT (public_key) DO UPDATE SET name = '{name}'"""
+        self.analysis_cursor.execute( cmd )
 
 
 database = MinaAnalysis( )
